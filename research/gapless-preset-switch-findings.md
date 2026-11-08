@@ -150,15 +150,34 @@ ramp variant at `0x8d7ee` forces its target to 1 when the flag is clear).
 `DM(0xc4d14)` and unlock. Between messages the graph runs if valid; during
 each add or remove it is skipped for a few blocks.
 
-### 2.3 Timing (medium)
+### 2.3 Timing, measured on the unit
 
-Mute ramp 7.5 ms (default) → 11 ms sleep → hold → one SPI frame per message
-batch, about 0.4 ms each, plus DSP build time per block; a chain of 6 blocks
-is tens of messages, more when a blob has to be sent (several KB over SPI at
-20 MHz: a few ms each) → release → unmute ramp 7.5 ms. We expect 30–100 ms
-in total and have not measured it; `measure_gap.py` reports the fade-out,
-gap and fade-in from a USB recording, and the fade-out it reports is also
-the real mute ramp length, which the fill must match.
+`tools/research/record_gap.py` plays a 440 Hz tone into the Stomp over USB
+(preset 018 takes USB 5/6 as its input), records USB out 1/2 and sends MIDI
+on the unit's channel. Switching between presets 018 and 019, two identical
+copies, five times (`--midi-channel 2 --out-pair 5`, events `pc19`/`pc18`),
+at a −40 dB threshold:
+
+| switch | fade-out | silence | fade-in |
+|---|---|---|---|
+| 018 → 019 (twice) | 5–7 ms | 84–85 ms | 5 ms |
+| 019 → 018 (three times) | 5–6 ms | 59 ms | 4–5 ms |
+| snapshot changes within 018 (five) | no gap | | |
+| program change to the preset already loaded | no gap | | |
+
+The silence is exact: the output falls to float denormals (−155 to −187
+dBFS), so during the rebuild the codec buffer holds zeros, not a stale
+block. The fade-out, per 440 Hz period (2.3 ms), goes −2, −5, −10, −25 dB
+and then straight to the floor: a ramp of about 7–9 ms that is cut off,
+closer to a linear 7.5 ms ramp than to the one-pole we assumed. The 25 ms
+difference between the two directions is the chain contents (019's blocks
+take longer to build). The gap seen from the ARM's MIDI input to the first
+audible effect is 25–70 ms of USB and processing latency and does not
+matter here.
+
+So the loop has to cover 60–90 ms for these presets; the 64 ms loop and the
+170 ms ring are enough, and `G_LEN` can grow to 128 ms if the ping-pong is
+audible.
 
 ## 3. Hook, signal, memory, cycles
 
@@ -252,8 +271,11 @@ Two ways out, both small:
    goes to 0 while `DM(0xc4cf5)` is clear). Medium confidence; option 1 is
    simpler.
 
-The DSP's own mute ramp stays as it is in both cases; `G_COEF` must match
-it (measure the fade-out, or decode `0x60f636`).
+The DSP's own mute ramp stays as it is in both cases. The measurement in
+section 2.3 shows it is nearly linear over about 7.5 ms rather than a
+one-pole, so the fill's fade should become a linear ramp of `muteRampTimeMS`
+(360 frames) instead of the `G_COEF` one-pole; the kernel change is a step
+added per sample in place of the multiply.
 
 ## 5. Prototype results
 
@@ -313,9 +335,9 @@ found a 4 ms dip to −56 dB at every turn of the loop.
   which TDM slots are L/R (and whether phones/send slots should be filled
   too; the kernel can take more slot pairs). Test: fill slots 0/1 only and
   listen on main out and phones.
-- **Mute ramp length** (medium): measure with `measure_gap.py`; set
-  `G_COEF` from the fade-out length (coefficient = exp(−4 / (fade_s · 48000))
-  for a 35 dB fade; `gapfill.py --ramp-ms` models it).
+- **Mute ramp** (measured): about 7.5 ms and close to linear (section 2.3);
+  the kernel's one-pole fade should be replaced by a linear ramp of the same
+  length before the hardware test.
 - **The stale block during edits**: HX Edit block adds and removes also skip
   the graph for a few blocks without any mute; the fill overwrites skipped
   blocks with `loop * g`, which with `g = 0` is silence rather than the
