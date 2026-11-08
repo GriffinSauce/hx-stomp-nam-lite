@@ -28,23 +28,23 @@
 .equ N,        8192             // ring frames (170 ms at 48 kHz)
 .equ RING_L,   0xec7000         // DDR2, carved from the end of Heap 4 (see the findings)
 .equ RING_R,   0xec9000         // RING_L + N
-.equ G_BASE,   0xec6f00         // state, DDR2
-.equ G_MODE,   0xec6f00
-.equ G_HOLD,   0xec6f01
-.equ G_RAN,    0xec6f02
-.equ G_SLOT_L, 0xec6f03
-.equ G_SLOT_R, 0xec6f04
-.equ G_GAIN,   0xec6f05         // float, the loop's gain g
-.equ G_RAMP,   0xec6f06         // float, the fade's step per sample (1/360 = 7.5 ms)
-.equ G_TARGET, 0xec6f07         // float, 0.0 or 1.0
-.equ G_W,      0xec6f08         // ring write position, absolute address in RING_L
-.equ G_P,      0xec6f09         // loop play position, absolute address in RING_L
-.equ G_DIR,    0xec6f0a         // +1 / -1
-.equ G_S,      0xec6f0b         // steps into the loop, 0 .. G_LEN-1
-.equ G_LEN,    0xec6f0c         // loop length in frames (<= N - G_MARGIN)
-.equ G_THRESH, 0xec6f0d         // float, g below this ends the resume (1e-3)
-.equ G_MARGIN, 0xec6f0e         // frames before W left out of the loop (the ARM's 11 ms)
-.equ G_SAVE,   0xec6f10         // 32 words: the caller's registers
+.equ G_BASE,   0xecb000         // state, DDR2
+.equ G_MODE,   0xecb000
+.equ G_HOLD,   0xecb001
+.equ G_RAN,    0xecb002
+.equ G_SLOT_L, 0xecb003
+.equ G_SLOT_R, 0xecb004
+.equ G_GAIN,   0xecb005         // float, the loop's gain g
+.equ G_RAMP,   0xecb006         // float, the fade's step per sample (1/360 = 7.5 ms)
+.equ G_TARGET, 0xecb007         // float, 0.0 or 1.0
+.equ G_W,      0xecb008         // ring write position, absolute address in RING_L
+.equ G_P,      0xecb009         // loop play position, absolute address in RING_L
+.equ G_DIR,    0xecb00a         // +1 / -1
+.equ G_S,      0xecb00b         // steps into the loop, 0 .. G_LEN-1
+.equ G_LEN,    0xecb00c         // loop length in frames (<= N - G_MARGIN)
+.equ G_THRESH, 0xecb00d         // float, g below this ends the resume (1e-3)
+.equ G_MARGIN, 0xecb00e         // frames before W left out of the loop (the ARM's 11 ms)
+.equ G_SAVE,   0xecb010         // 32 words: the caller's registers
 .equ G_STEP,   8                // TDM slots per frame
 
 .section pm 0x0c5200
@@ -279,7 +279,7 @@ g_done:
     NOP;
     RTS;
 
-.section dm 0xec6f00
+.section dm 0xecb000
     .word 0, 0, 1, 0, 1             // G_MODE, G_HOLD, G_RAN, G_SLOT_L, G_SLOT_R
     .float 0.0                      // G_GAIN
     .word 0x3b360b61                // G_RAMP: 1/360, a 7.5 ms ramp

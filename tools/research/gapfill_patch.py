@@ -12,9 +12,10 @@ stream):
   2. three VISA parcel patches in the audio task (block 1 code), so that every
      block goes through the hook: the CJUMP at 0x176463 targets the stub, the
      two skip branches at 0x176400 and 0x176405 lead to it;
-  3. with --fill: `tools/sharc/gapfill_kernel.asm` and its state, and the end
-     of DSP heap 4 moved from 0xed7000 to 0xec7000 (immediates at 0x178855,
-     0x17885b and 0x6098b7) to make room for the ring.
+  3. the end of DSP heap 4 moved from 0xed7000 to 0xec7000 (immediates at
+     0x178855 and 0x17885b), freeing room for the ring and the state;
+  4. with --fill: `tools/sharc/gapfill_kernel.asm` and its state (an
+     INIT_EXT32 block at 0xecb000).
 
 Every checksum is recomputed by l6ia.rebuild_archive. Without --fill the image
 is the stock behaviour plus the hook: the first thing to try on the unit (from
@@ -43,11 +44,19 @@ AUDIO_TASK_PATCHES = [
     (0x176405, [0x072e, 0x0000, 0x005e], [0x073e, 0x0000, 0x005e]),   # IF NOT SV JUMP (PC, 0x176463) -> unconditional
     (0x176463, [0x1804, 0x0008, 0xcb20], None),                       # CJUMP 0x8cb20 (DB) -> CJUMP stub (DB)
 ]
+# Heap 4 is 0x328000..0xed7000; lowering its end frees 0xec7000..0xed7000 for the
+# ring and the state. The R12 = 0xed7000 at 0x6098b7 is NOT the heap end: it is the
+# base of two 0x1000-word buffers just above heap 4 (0x608bba), and must stay.
 HEAP_END_PATCHES = [
     (0x178855, [0x0f14, 0x00ed, 0x7000], [0x0f14, 0x00ec, 0x7000]),   # I4 = 0xed7000: heap 4 end
     (0x17885b, [0x0f0c, 0x00ba, 0xf000], [0x0f0c, 0x00b9, 0xf000]),   # R12 = 0xbaf000: heap 4 size
-    (0x6098b7, [0x0f0c, 0x00ed, 0x7000], [0x0f0c, 0x00ec, 0x7000]),   # R12 = 0xed7000: the same end, at init
 ]
+
+
+def pack_init_ext32(addr32, data_words):
+    """An LDR INIT_EXT32 (tag 10) block, as the stock stream loads external memory."""
+    dw = [int(x) & 0xffffffff for x in data_words]
+    return [10, len(dw), addr32] + dw
 
 
 def ldr_blocks(w):
@@ -126,6 +135,9 @@ def main():
             assert s.addr + len(s.words) <= 0xC5554, f'PM code at {s.addr:#x} runs past block 2'
             ldr_words += patch_amp.pack_init_l48(s.addr, s.words)
             print(f'[+] Entry 2: {len(s.words)} instructions @ PM {s.addr:#x}')
+        elif s.addr >= 0x200000:
+            ldr_words += pack_init_ext32(s.addr, s.words)
+            print(f'[+] Entry 2: {len(s.words)} data words @ external DM {s.addr:#x} (INIT_EXT32)')
         else:
             ldr_words += patch_amp.pack_init_l32(s.addr, s.words)
             print(f'[+] Entry 2: {len(s.words)} data words @ DM {s.addr:#x}')
@@ -135,8 +147,7 @@ def main():
     # 2. the audio task patches (and 3. the heap move)
     patches = list(AUDIO_TASK_PATCHES)
     patches[2] = (0x176463, patches[2][1], [0x1804, stub >> 16, stub & 0xFFFF])
-    if a.fill:
-        patches += HEAP_END_PATCHES
+    patches += HEAP_END_PATCHES         # the stub writes G_HOLD / G_RAN there even without the fill
     for sw, expect, new in patches:
         patch_parcels(w, blocks, sw, expect, new)
         print(f'[+] parcels {sw:#x}: {" ".join(f"{x:04x}" for x in expect)} -> {" ".join(f"{x:04x}" for x in new)}')

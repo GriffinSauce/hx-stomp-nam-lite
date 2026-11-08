@@ -17,8 +17,8 @@
 .equ HOLD_FLAG,   0xc4cf5
 .equ CH1_BLOCK,   0xc5b45
 .equ GRAPH_RUN,   0x8cb20
-.equ G_HOLD,      0xec6f01
-.equ G_RAN,       0xec6f02
+.equ G_HOLD,      0xecb001
+.equ G_RAN,       0xecb002
 
 .section pm 0x0c5100
 
