@@ -12,10 +12,14 @@ stream):
   2. three VISA parcel patches in the audio task (block 1 code), so that every
      block goes through the hook: the CJUMP at 0x176463 targets the stub, the
      two skip branches at 0x176400 and 0x176405 lead to it;
-  3. the end of DSP heap 4 moved from 0xed7000 to 0xec7000 (immediates at
-     0x178855 and 0x17885b), freeing room for the ring and the state;
-  4. with --fill: `tools/sharc/gapfill_kernel.asm` and its state (an
-     INIT_EXT32 block at 0xecb000).
+  3. with --fill: `tools/sharc/gapfill_kernel.asm` and its state (an
+     INIT_EXT32 block at 0x2fc000). The ring and the state use DDR2
+     0x2f8000..0x2fc040, below the DSP's external code at 0x300000, which
+     nothing in the program refers to.
+
+--heap-move adds the earlier attempt, heap 4's end lowered to 0xec7000: it
+hangs the unit at boot (seen on 2026-11-08 with the hook alone), and is kept
+only to reproduce that.
 
 Every checksum is recomputed by l6ia.rebuild_archive. Without --fill the image
 is the stock behaviour plus the hook: the first thing to try on the unit (from
@@ -44,9 +48,9 @@ AUDIO_TASK_PATCHES = [
     (0x176405, [0x072e, 0x0000, 0x005e], [0x073e, 0x0000, 0x005e]),   # IF NOT SV JUMP (PC, 0x176463) -> unconditional
     (0x176463, [0x1804, 0x0008, 0xcb20], None),                       # CJUMP 0x8cb20 (DB) -> CJUMP stub (DB)
 ]
-# Heap 4 is 0x328000..0xed7000; lowering its end frees 0xec7000..0xed7000 for the
-# ring and the state. The R12 = 0xed7000 at 0x6098b7 is NOT the heap end: it is the
-# base of two 0x1000-word buffers just above heap 4 (0x608bba), and must stay.
+# Heap 4 is 0x328000..0xed7000. Lowering its end hangs the unit at boot, even with
+# the R12 = 0xed7000 at 0x6098b7 left alone (that one is the base of two 0x1000-word
+# buffers just above heap 4, 0x608bba). Only used with --heap-move.
 HEAP_END_PATCHES = [
     (0x178855, [0x0f14, 0x00ed, 0x7000], [0x0f14, 0x00ec, 0x7000]),   # I4 = 0xed7000: heap 4 end
     (0x17885b, [0x0f0c, 0x00ba, 0xf000], [0x0f0c, 0x00b9, 0xf000]),   # R12 = 0xbaf000: heap 4 size
@@ -104,7 +108,8 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('input')
     ap.add_argument('output')
-    ap.add_argument('--fill', action='store_true', help='add the fill kernel and the heap move (default: the hook only)')
+    ap.add_argument('--fill', action='store_true', help='add the fill kernel (default: the hook only)')
+    ap.add_argument('--heap-move', action='store_true', help='also lower heap 4\'s end (hangs the unit; to reproduce only)')
     ap.add_argument('--donor', help='a stock .hxf for the container header when the input is a .l6ia')
     a = ap.parse_args()
 
@@ -147,7 +152,8 @@ def main():
     # 2. the audio task patches (and 3. the heap move)
     patches = list(AUDIO_TASK_PATCHES)
     patches[2] = (0x176463, patches[2][1], [0x1804, stub >> 16, stub & 0xFFFF])
-    patches += HEAP_END_PATCHES         # the stub writes G_HOLD / G_RAN there even without the fill
+    if a.heap_move:                     # hangs the unit at boot (2026-11-08): kept only to reproduce it
+        patches += HEAP_END_PATCHES
     for sw, expect, new in patches:
         patch_parcels(w, blocks, sw, expect, new)
         print(f'[+] parcels {sw:#x}: {" ".join(f"{x:04x}" for x in expect)} -> {" ".join(f"{x:04x}" for x in new)}')
