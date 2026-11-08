@@ -18,11 +18,11 @@
 // Live: ring[W] = out, W++. Hold: the loop is the G_LEN frames that end
 // G_MARGIN frames before W (the margin skips what the stock mute already
 // faded before the hold arrived), played forward then backward (continuous
-// at each turn), mixed in as out = live * ran + loop * g, with g following
-// a one-pole ramp to 1 (G_COEF, the stock mute ramp's coefficient, so the
-// loop fades in as the stock mute fades the live signal out). Resume: g
-// ramps to 0 while the new preset's output fades in; below -60 dB the ring
-// records again.
+// at each turn), mixed in as out = live * ran + loop * g, with g ramping
+// linearly to 1 by G_RAMP per sample (1/360: the stock mute's 7.5 ms, as
+// measured on the unit, so the loop fades in as the stock mute fades the
+// live signal out). Resume: g ramps to 0 while the new preset's output fades
+// in; below -60 dB the ring records again.
 
 .equ CBUFEN,   0x1000000
 .equ N,        8192             // ring frames (170 ms at 48 kHz)
@@ -35,7 +35,7 @@
 .equ G_SLOT_L, 0xec6f03
 .equ G_SLOT_R, 0xec6f04
 .equ G_GAIN,   0xec6f05         // float, the loop's gain g
-.equ G_COEF,   0xec6f06         // float, one-pole coefficient (0.9976: the stock ramp's)
+.equ G_RAMP,   0xec6f06         // float, the fade's step per sample (1/360 = 7.5 ms)
 .equ G_TARGET, 0xec6f07         // float, 0.0 or 1.0
 .equ G_W,      0xec6f08         // ring write position, absolute address in RING_L
 .equ G_P,      0xec6f09         // loop play position, absolute address in RING_L
@@ -182,9 +182,7 @@ g_play:
     I4 = R0;
     F10 = DM(G_GAIN);
     F9 = DM(G_TARGET);
-    F8 = DM(G_COEF);
-    F0 = 1.0;
-    F8 = F0 - F8;                           // k = 1 - coef
+    F8 = DM(G_RAMP);
     R0 = DM(G_RAN);
     F4 = FLOAT R0;                          // 1.0 or 0.0: the live signal's gain
     R5 = DM(G_LEN);
@@ -192,8 +190,8 @@ g_play:
     R6 = DM(G_DIR);
     R7 = DM(G_S);
     LCNTR = 16, DO g_frame UNTIL LCE;
-    F0 = F9 - F10;                          // g += (target - g) * k
-    F0 = F0 * F8;
+    F0 = F9 - F10;                          // g moves towards the target by at most G_RAMP
+    F0 = CLIP F0 BY F8;
     F10 = F10 + F0;
     F1 = DM(0, I3);                         // loop L, R
     F3 = DM(0, I4);
@@ -284,7 +282,7 @@ g_done:
 .section dm 0xec6f00
     .word 0, 0, 1, 0, 1             // G_MODE, G_HOLD, G_RAN, G_SLOT_L, G_SLOT_R
     .float 0.0                      // G_GAIN
-    .word 0x3f7f62b7                // G_COEF: the stock mute ramp's 0.9976
+    .word 0x3b360b61                // G_RAMP: 1/360, a 7.5 ms ramp
     .float 0.0                      // G_TARGET
     .word RING_L, RING_L, 1, 0      // G_W, G_P, G_DIR, G_S
     .word 3072                      // G_LEN: 64 ms

@@ -35,10 +35,14 @@ SLOTS = 8
 N = 8192
 RING_L, RING_R = 0xEC7000, 0xEC9000
 G = 0xEC6F00
-(G_MODE, G_HOLD, G_RAN, G_SLOT_L, G_SLOT_R, G_GAIN, G_COEF, G_TARGET,
+(G_MODE, G_HOLD, G_RAN, G_SLOT_L, G_SLOT_R, G_GAIN, G_RAMP, G_TARGET,
  G_W, G_P, G_DIR, G_S, G_LEN, G_THRESH, G_MARGIN) = range(G, G + 15)
-MUTE_COEF = np.float32(ssim.b2f(0x3F7F62B7))     # the stock ramp primitive's constant
 f32 = np.float32
+
+
+def ramp_step(ramp_ms):
+    """Per-sample step of a linear ramp over ramp_ms (the stock mute: 7.5 ms, measured)."""
+    return f32(1.0 / (ramp_ms / 1000 * FS))
 
 
 def q31(x):
@@ -57,9 +61,9 @@ def from_q31(w):
 class GapFill:
     """The kernel's algorithm in float32, one block at a time."""
 
-    def __init__(self, length=3072, coef=MUTE_COEF, slot_l=0, slot_r=1, margin=528):
+    def __init__(self, length=3072, step=None, slot_l=0, slot_r=1, margin=528):
         self.mode, self.gain, self.target = 0, f32(0), f32(0)
-        self.coef, self.k = f32(coef), f32(f32(1) - f32(coef))
+        self.step = f32(step if step is not None else ramp_step(7.5))
         self.ring_l, self.ring_r = np.zeros(N, np.float32), np.zeros(N, np.float32)
         self.w, self.p, self.dir, self.s, self.length = 0, 0, 1, 0, length
         self.margin = margin                                   # frames the stock mute faded before the hold
@@ -82,7 +86,8 @@ class GapFill:
             return
         live = f32(1 if ran else 0)
         for k in range(BLOCK):
-            self.gain = f32(self.gain + f32(f32(self.target - self.gain) * self.k))
+            d = f32(self.target - self.gain)
+            self.gain = f32(self.gain + f32(max(-self.step, min(self.step, d))))
             xl, xr = self.ring_l[self.p], self.ring_r[self.p]
             if self.s == self.length - 1:
                 self.dir = -1
@@ -138,23 +143,18 @@ def signals(seconds):
     return out
 
 
-def ramp_coef(ramp_ms):
-    """One-pole coefficient of a mute ramp that is 35 dB down after ramp_ms."""
-    return f32(math.exp(-4.0 / (ramp_ms / 1000 * FS)))
-
-
 def scenario(x, gap_ms, switch_s=0.25, arm_sleep_ms=11.0, ramp_ms=7.5, new_phase=False):
     """What the codec gets per block, stock: (live samples, hold, ran) per block.
     The ARM mutes at switch_s, sleeps 11 ms, holds and tears the graph down;
-    gap_ms later it rebuilds, releases the hold and unmutes. The mute is the
-    stock one-pole ramp on the live signal; while the graph is torn down the
-    buffer keeps the last block it wrote."""
+    gap_ms later it rebuilds, releases the hold and unmutes. The mute is a
+    linear ramp of ramp_ms on the live signal (as measured on the unit); while
+    the graph is torn down the buffer keeps the last block it wrote."""
     n = len(x)
     y = x.copy()
     if new_phase:                                          # the new preset: same source, other phase
         y[int(FS * switch_s):] = np.roll(x, 777)[int(FS * switch_s):]
     g, target = 1.0, 1.0
-    coef = float(ramp_coef(ramp_ms))
+    step = float(ramp_step(ramp_ms))
     t_mute = int(FS * switch_s)
     t_hold = t_mute + int(FS * arm_sleep_ms / 1000)
     t_release = t_hold + int(FS * gap_ms / 1000)
@@ -172,7 +172,7 @@ def scenario(x, gap_ms, switch_s=0.25, arm_sleep_ms=11.0, ramp_ms=7.5, new_phase
                 target = 0.0
             if i == t_release:
                 target = 1.0
-            g = g + (target - g) * (1 - coef)
+            g = g + max(-step, min(step, target - g))
             out[k] = y[i] * g
         if ran:
             last = out
@@ -198,10 +198,10 @@ def write_wav(path, left, right):
 
 def run(name, x, gap_ms, wav_dir, ramp_ms=7.5, check=True):
     blocks = scenario(x, gap_ms, ramp_ms=ramp_ms)
-    coef = ramp_coef(ramp_ms)
-    ref = GapFill(coef=coef)
+    step = ramp_step(ramp_ms)
+    ref = GapFill(step=step)
     sim, syms, code = load_kernel()
-    sim.wr(G_COEF, ssim.f2b(float(coef)))                 # the fill's ramp matches the mute's
+    sim.wr(G_RAMP, ssim.f2b(float(step)))                 # the fill's ramp matches the mute's
     stock, filled, worst, mismatches = [], [], 0, 0
     for out, hold, ran in blocks:
         buf = [0] * (BLOCK * SLOTS)

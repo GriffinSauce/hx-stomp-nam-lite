@@ -273,9 +273,11 @@ Two ways out, both small:
 
 The DSP's own mute ramp stays as it is in both cases. The measurement in
 section 2.3 shows it is nearly linear over about 7.5 ms rather than a
-one-pole, so the fill's fade should become a linear ramp of `muteRampTimeMS`
-(360 frames) instead of the `G_COEF` one-pole; the kernel change is a step
-added per sample in place of the multiply.
+one-pole, so the kernel's fade is a linear ramp of `G_RAMP` per sample
+(1/360: 7.5 ms). With the stock call order the simulation shows what is
+left: the mute is complete 3–4 ms before the hold command arrives, so the
+loop starts from silence that late (`gapfill.py` renders it; `measure_gap.py`
+reports a 3–4 ms gap on the filled output). Option 1 removes it.
 
 ## 5. Prototype results
 
@@ -311,23 +313,33 @@ arrived and dropped at the teardown, hence `G_COEF` is a parameter; and
 without `G_MARGIN` the loop carried the faded tail and `measure_gap.py`
 found a 4 ms dip to −56 dB at every turn of the loop.
 
-## 6. How it would be injected (not wired into build.py)
+## 6. How it is injected (not wired into build.py)
 
-1. `patch_amp.py patch`-style LDR blocks for the kernel's `.section pm`
-   (after the NAM kernel, `_scan_e2_injected` gives the free PM start in
-   block 2; the prototype assembles at `0xc5200`) and its `.section dm`
-   state (an INIT_L32 block at `0xec6f00`).
-2. The ISA stub (to write): saves the C frame as `0x8cb20`'s callers expect,
-   tests `DM(0xc4d14)` and `DM(0xc4cf7)`, calls `0x8cb20` or not, sets
-   `G_RAN`, copies `DM(0xc4cf5)` to `G_HOLD`, sets I1 = `DM(0xc5b45)` and
-   calls `GAPFILL_ENTRY`, then returns through `I12 = DM(M7, I6); JUMP (M14,
-   I12) (DB); NOP; RFRAME`.
-3. Three VISA parcel patches in block 1's INIT_L16 data (0x176400,
-   0x176405, 0x176463: the stream packs two parcels per 32-bit word, high
-   half first; `sharc_ldr.py` has the mapping), and the heap-end immediates
-   at `0x178855`, `0x17885b`, `0x6098b7` (block 1 and DDR2 INIT blocks).
-4. Optionally the ARM reorder (section 4) in Entry 0, or the `0x2af8`
-   sleep constant.
+`tools/research/gapfill_patch.py <in.hxf> <out.hxf> [--fill]` does it on a
+built image (the NAM A2 Lite build, so a RAM run matches the installed
+firmware):
+
+1. The hook `tools/sharc/gapfill_stub.asm` as an INIT_L48 block after the
+   last injected kernel: a C function that tests `DM(0xc4d14)` and
+   `DM(0xc4cf7)`, calls `0x8cb20` (CJUMP with the frame stores) or not, sets
+   `G_RAN`, copies `DM(0xc4cf5)` to `G_HOLD`, and with `--fill` sets I1 =
+   `DM(0xc5b45)` and calls the kernel; it returns through `I12 = DM(M7, I6);
+   JUMP (M14, I12) (DB); NOP; RFRAME`. Checked in the simulator with an
+   emulated graph runner: the frame and stack come back as the caller left
+   them in all four flag combinations.
+2. Three VISA parcel patches in block 1's INIT_L16 block (two parcels per
+   stream word, high half first): `0x176400` `070e 0000 0008 → 070e 0000
+   0063`, `0x176405` `072e 0000 005e → 073e 0000 005e`, `0x176463` `1804
+   0008 cb20 → 1804 000c xxxx` (the stub).
+3. With `--fill`: the kernel's `.section pm` and its state (INIT_L32 at
+   `0xec6f00`), and the heap-end immediates `0x178855`, `0x17885b` (block 1)
+   and `0x6098b7` (DDR2) moved from `0xed7000` to `0xec7000`.
+4. Not done: the ARM reorder (section 4) in Entry 0.
+
+Both images (`build/HX_Stomp_gaphook.hxf`, the hook alone, and
+`build/HX_Stomp_gapfill.hxf`) pass `l6ia_verify.py`. They are meant to be run
+from RAM with upstream main's `tools/hxf_ram.py` (RAM_RUN.md there), which
+writes nothing to the eMMC, and measured with `record_gap.py`.
 
 ## 7. Risks, open questions, hardware tests
 
