@@ -372,9 +372,10 @@ Learned on the way:
   vendor interface; re-plugging the cable brings back 480 Mb/s with audio and
   MIDI.
 - With the fill image the block picker and the chain view misbehave on the
-  first two blocks. Not yet known whether this is the RAM run (presets and
-  settings are already broken there) or the fill: a control run of the plain
-  NAM build from RAM decides it.
+  first two blocks. A control run of the plain NAM build from RAM (no hook,
+  no fill) shows the same UI problems and the same empty presets, so both
+  come from the RAM run on this unit (the loader cannot start the eMMC here,
+  status 0x10b), not from the hook or the fill.
 
 ## 7. Risks, open questions, hardware tests
 
