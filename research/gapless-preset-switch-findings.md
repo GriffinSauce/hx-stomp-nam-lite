@@ -341,6 +341,41 @@ Both images (`build/HX_Stomp_gaphook.hxf`, the hook alone, and
 from RAM with upstream main's `tools/hxf_ram.py` (RAM_RUN.md there), which
 writes nothing to the eMMC, and measured with `record_gap.py`.
 
+## 6a. On the unit (2026-11-08, from RAM)
+
+Images built with `gapfill_patch.py` on the NAM A2 Lite build and run from
+RAM with upstream's `hxf_ram.py`; measured with `record_gap.py
+--midi-channel 2 --out-pair 5` (440 Hz tone into presets 018/019 on USB 5/6).
+
+| image | 018 ↔ 019 | snapshots |
+|---|---|---|
+| installed firmware (baseline) | 5–7 ms fade-out, 59–85 ms silence, 5 ms fade-in | no gap |
+| hook only | 5–6 ms fade-out, 52–82 ms silence, 5–6 ms fade-in | no gap |
+| hook + fill | 4–7 ms fade-out, **3–4 ms** dip, 5–6 ms fade-in | no gap |
+
+The remaining 3–4 ms dip is the one the simulator predicted for the stock
+call order (section 4): the mute completes before the hold command arrives.
+The ARM reorder removes it. The presets differ slightly between the baseline
+and the RAM runs, which start with empty presets and lost settings (they were
+rebuilt by hand in each run).
+
+Learned on the way:
+
+- Lowering heap 4's end (`0x178855`, `0x17885b`) hangs the unit at boot, even
+  with the hook alone; moving `0x6098b7` as well (an earlier, wrong reading
+  of it as the heap end: it is the base of two buffers above heap 4) does
+  too. The ring and state now live at DDR2 `0x2f8000..0x2fc040`, between the
+  object at `0x2eb5ee` (a buffer of 0x800 units with a semaphore, used by the
+  graph-building path) and the external code at `0x300000`. That the 0x800
+  are words, so the ring does not overlap it, is not proven.
+- After a RAM run starts, the Stomp enumerates at 12 Mb/s with only its
+  vendor interface; re-plugging the cable brings back 480 Mb/s with audio and
+  MIDI.
+- With the fill image the block picker and the chain view misbehave on the
+  first two blocks. Not yet known whether this is the RAM run (presets and
+  settings are already broken there) or the fill: a control run of the plain
+  NAM build from RAM decides it.
+
 ## 7. Risks, open questions, hardware tests
 
 - **Channel and slots** (medium): that channel 1 is the main output and
